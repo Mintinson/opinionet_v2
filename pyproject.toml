@@ -40,6 +40,7 @@ dev = [
 train_model = "opinionet.scripts.train:train"
 eval_model = "opinionet.scripts.evaluate:evaluate"
 pretrain_model = "opinionet.scripts.pretrain:pretrain"
+ensemble_evaluate = "opinionet.scripts.ensemble:ensemble_evaluate"
 visualize_metrics = "opinionet.scripts.visualize:visualize"
 
 [build-system]

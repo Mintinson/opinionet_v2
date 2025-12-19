@@ -69,6 +69,20 @@ eval_model --model_path checkpoints/best_model.pt --data_path data/TEST/Test_rev
 visualize_metrics --data_path models/roberta_makeup/20251219_183416/training_metrics.npy
 ```
 
+### 5. （可选）模型融合评估
+
+有融合的模型必须使用相同的 `Tokenizer`（即 `--base_model` 参数必须一致，比如都是 `roberta`），否则 Input IDs 会对不上。
+
+```bash
+ensemble_evaluate \
+  --model_paths \
+    "models/roberta_makeup/.../roberta_best.pt" \
+    "models/roberta_makeup/.../roberta_best.pt" \
+    "models/roberta_makeup/.../roberta_best.pt" \
+```
+
+注意：该脚本会同时将所有模型加载到显存中。如果显存不足（OOM），请减小 `--batch_size`（例如设为 1 或 2）
+
 ## 配置说明
 
 本项目使用 `draccus` 处理配置。所有可执行文件的超参数（如 `learning_rate`, `batch_size`, `hidden_size` 等）均可以通过 YAML 配置文件或命令行参数进行修改。
