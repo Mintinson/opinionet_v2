@@ -18,6 +18,12 @@ uv sync
 
 # 或者使用 pip 安装
 pip install -e .
+
+# 然后进入环境
+# Linux
+source .venv/bin/activate    
+# Windows
+\.venv\Scripts\activate
 ```
 
 ### 2. 开发环境 (可选)
