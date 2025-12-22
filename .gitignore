@@ -10,4 +10,4 @@ wheels/
 .venv
 
 # ckpt files for trained
-models/
+/models/
