@@ -11,3 +11,5 @@ wheels/
 
 # ckpt files for trained
 /models/
+
+/submit/

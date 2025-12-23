@@ -143,7 +143,7 @@ def train(cfg: TrainingConfig):
         train_data.precision.append(train_pr)
         train_data.recall.append(train_rc)
         overwatch.info(
-            f"Train - Loss: {train_loss:.4f}, F1: {train_f1:.4f}, "
+            f"Train {epoch + 1}/{cfg.epochs} - Loss: {train_loss:.4f}, F1: {train_f1:.4f}, "
             f"Precision: {train_pr:.4f}, Recall: {train_rc:.4f}"
         )
         if cfg.max_num_ckpt_saves > 0:
@@ -176,7 +176,7 @@ def train(cfg: TrainingConfig):
         val_data.precision.append(val_pr)
         val_data.recall.append(val_rc)
         overwatch.info(
-            f"Val   - Loss: {val_loss:.4f}, F1: {val_f1:.4f}, "
+            f"Val {epoch + 1}/{cfg.epochs}   - Loss: {val_loss:.4f}, F1: {val_f1:.4f}, "
             f"Precision: {val_pr:.4f}, Recall: {val_rc:.4f}"
         )
         # Save best model

@@ -82,9 +82,7 @@ visualize_metrics --data_path models/roberta_makeup/20251219_183416/training_met
 ```bash
 ensemble_evaluate \
   --model_paths \
-    "models/roberta_makeup/.../roberta_best.pt" \
-    "models/roberta_makeup/.../roberta_best.pt" \
-    "models/roberta_makeup/.../roberta_best.pt" \
+  "['models/roberta_makeup/.../roberta_best.pt', 'models/roberta_makeup/.../roberta_best.pt']"
 ```
 
 注意：该脚本会同时将所有模型加载到显存中。如果显存不足（OOM），请减小 `--batch_size`（例如设为 1 或 2）

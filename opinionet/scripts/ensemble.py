@@ -133,10 +133,9 @@ def ensemble_evaluate(cfg: EnsembleConfig):
     all_predictions = []
 
     with torch.no_grad():
-        for batch_idx, (raw, inputs, _) in tqdm(
-            enumerate(test_loader), total=len(test_loader), desc="Ensemble Inference"
+        for _, inputs, _ in tqdm(
+            test_loader, total=len(test_loader), desc="Ensemble Inference"
         ):
-            rv_raw, _ = raw
 
             # Move inputs to device
             input_ids, attention_mask, token_mask = [item.to(device) for item in inputs]
@@ -162,7 +161,12 @@ def ensemble_evaluate(cfg: EnsembleConfig):
             candidates = models[0].generate_candidates(avg_probs)
             filtered_preds = models[0].nms_filter(candidates, threshold=cfg.threshold)
 
-            all_predictions.extend(filtered_preds)
+            for b in range(len(filtered_preds)):
+                pred = set([x[0] for x in filtered_preds[b]])
+
+                all_predictions.append(pred)
+
+            # all_predictions.extend(filtered_preds)
 
     # 5. Save Results
     overwatch.info("💾 Formatting and saving results...")
@@ -189,7 +193,6 @@ def ensemble_evaluate(cfg: EnsembleConfig):
         overwatch.warning(
             f"⚠ Warning: Number of predictions ({len(all_predictions)}) does not match number of reviews ({len(reviews_df)})."
         )
-
     for pred_set, review_id in zip(all_predictions, reviews_df["id"]):
         for pred_tuple in pred_set:
             results.append(_format_prediction(pred_tuple, review_id))
@@ -205,4 +208,4 @@ def ensemble_evaluate(cfg: EnsembleConfig):
 
 
 if __name__ == "__main__":
-    ensemble_evaluate() # pyright: ignore[reportCallIssue]
+    ensemble_evaluate()  # pyright: ignore[reportCallIssue]
