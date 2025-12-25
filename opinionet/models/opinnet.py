@@ -6,6 +6,108 @@ import torch.nn.functional as F  # noqa: N812
 from transformers import BertConfig, BertModel
 
 
+class BiaffineAttention(nn.Module):
+    """Biaffine attention layer for span boundary detection.
+
+    Computes: score(i,j) = x_i^T W x_j + U x_i + V x_j + b
+
+    This provides richer interaction between start and end positions compared
+    to simple additive attention.
+
+    Args:
+        in_features: Input feature dimension (BERT hidden size)
+        hidden_size: Hidden layer size for the biaffine transformation
+    """
+
+    def __init__(self, in_features: int, hidden_size: int = 150) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.hidden_size = hidden_size
+
+        # MLP projections for start and end representations
+        self.mlp_start = nn.Sequential(
+            nn.Linear(in_features, hidden_size),
+            nn.LeakyReLU(),
+            nn.Dropout(0.3),
+        )
+        self.mlp_end = nn.Sequential(
+            nn.Linear(in_features, hidden_size),
+            nn.LeakyReLU(),
+            nn.Dropout(0.3),
+        )
+
+        # Biaffine parameters: x_i^T W x_j
+        self.W = nn.Parameter(torch.zeros(hidden_size, hidden_size))
+        nn.init.xavier_uniform_(self.W)
+
+        # Linear parameters: U x_i + V x_j + b
+        self.U = nn.Linear(hidden_size, 1, bias=False)
+        self.V = nn.Linear(hidden_size, 1, bias=False)
+        self.b = nn.Parameter(torch.zeros(1))
+
+    def forward(self, sequence_output: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            sequence_output: [batch_size, seq_len, in_features]
+
+        Returns:
+            logits: [batch_size, seq_len, seq_len]
+        """
+        # Project to start/end representations
+        start_repr = self.mlp_start(sequence_output)  # [batch, seq, hidden]
+        end_repr = self.mlp_end(sequence_output)  # [batch, seq, hidden]
+
+        # Bilinear term: start_repr @ W @ end_repr^T
+        # [batch, seq, hidden] @ [hidden, hidden] -> [batch, seq, hidden]
+        # [batch, seq, hidden] @ [batch, hidden, seq] -> [batch, seq, seq]
+        bilinear = torch.einsum("bih,hh,bjh->bij", start_repr, self.W, end_repr)
+
+        # Linear terms: U @ start + V @ end
+        linear_start = self.U(start_repr)  # [batch, seq, 1]
+        linear_end = self.V(end_repr)  # [batch, seq, 1]
+
+        # Combine: [batch, seq, seq]
+        logits = bilinear + linear_start + linear_end.transpose(1, 2) + self.b
+
+        return logits
+
+
+def label_smoothing_ce(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    smoothing: float = 0.1,
+    ignore_index: int = -1,
+) -> torch.Tensor:
+    """Cross entropy loss with label smoothing.
+
+    Handles masked logits (values < -1e4) by replacing them with a small value
+    before computing label smoothing to avoid numerical issues.
+
+    Args:
+        logits: Model predictions [batch, num_classes] or [batch, num_classes, seq]
+        targets: Target labels [batch] or [batch, seq]
+        smoothing: Label smoothing factor (0.0 = no smoothing)
+        ignore_index: Index to ignore in loss calculation
+
+    Returns:
+        Loss value (scalar tensor with gradient)
+    """
+    # Handle masked logits: replace extreme negative values with reasonable ones
+    # This is necessary because label_smoothing distributes probability to all classes
+    # and extreme values like -1e5 cause numerical issues
+    mask_threshold = -1e4
+    if (logits < mask_threshold).any():
+        # Replace masked values with the minimum non-masked value minus a margin
+        non_masked_min = logits[logits >= mask_threshold].min()
+        logits = logits.clone()
+        logits[logits < mask_threshold] = non_masked_min - 10.0
+
+    loss = F.cross_entropy(
+        logits, targets, ignore_index=ignore_index, label_smoothing=smoothing
+    )
+    return loss
+
+
 def margin_negsub_bce_with_logits(
     logits: torch.Tensor, target: torch.Tensor, margin: float = 0.1, neg_sub: float = 0.5
 ) -> torch.Tensor:
@@ -104,6 +206,10 @@ class OpinionNet(nn.Module):
         num_makeup_categories: int = 13,
         num_polarities: int = 3,
         device: Optional[torch.device] = None,
+        # === New optimization switches ===
+        use_biaffine: bool = False,
+        biaffine_hidden_size: int = 150,
+        label_smoothing: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -112,26 +218,46 @@ class OpinionNet(nn.Module):
         self.hidden_size = hidden_size
         self.bert_hidden_size = config.hidden_size
 
+        # Optimization flags
+        self.use_biaffine = use_biaffine
+        self.label_smoothing = label_smoothing
+
         # BERT encoder
         self.bert = BertModel(config)
 
-        # Aspect start/end layers
-        self.w_as11 = nn.Linear(self.bert_hidden_size, hidden_size)
-        self.w_as12 = nn.Linear(self.bert_hidden_size, hidden_size)
-        self.w_ae21 = nn.Linear(self.bert_hidden_size, hidden_size)
-        self.w_ae22 = nn.Linear(self.bert_hidden_size, hidden_size)
+        if use_biaffine:
+            # Biaffine attention for pointer network (richer span interaction)
+            self.biaffine_as = BiaffineAttention(
+                self.bert_hidden_size, biaffine_hidden_size
+            )
+            self.biaffine_ae = BiaffineAttention(
+                self.bert_hidden_size, biaffine_hidden_size
+            )
+            self.biaffine_os = BiaffineAttention(
+                self.bert_hidden_size, biaffine_hidden_size
+            )
+            self.biaffine_oe = BiaffineAttention(
+                self.bert_hidden_size, biaffine_hidden_size
+            )
+        else:
+            # Original additive pointer network
+            # Aspect start/end layers
+            self.w_as11 = nn.Linear(self.bert_hidden_size, hidden_size)
+            self.w_as12 = nn.Linear(self.bert_hidden_size, hidden_size)
+            self.w_ae21 = nn.Linear(self.bert_hidden_size, hidden_size)
+            self.w_ae22 = nn.Linear(self.bert_hidden_size, hidden_size)
 
-        # Opinion start/end layers
-        self.w_os11 = nn.Linear(self.bert_hidden_size, hidden_size)
-        self.w_os12 = nn.Linear(self.bert_hidden_size, hidden_size)
-        self.w_oe21 = nn.Linear(self.bert_hidden_size, hidden_size)
-        self.w_oe22 = nn.Linear(self.bert_hidden_size, hidden_size)
+            # Opinion start/end layers
+            self.w_os11 = nn.Linear(self.bert_hidden_size, hidden_size)
+            self.w_os12 = nn.Linear(self.bert_hidden_size, hidden_size)
+            self.w_oe21 = nn.Linear(self.bert_hidden_size, hidden_size)
+            self.w_oe22 = nn.Linear(self.bert_hidden_size, hidden_size)
 
-        # Output layers for pointer network
-        self.w_as2 = nn.Linear(hidden_size, 1)
-        self.w_ae2 = nn.Linear(hidden_size, 1)
-        self.w_os2 = nn.Linear(hidden_size, 1)
-        self.w_oe2 = nn.Linear(hidden_size, 1)
+            # Output layers for pointer network
+            self.w_as2 = nn.Linear(hidden_size, 1)
+            self.w_ae2 = nn.Linear(hidden_size, 1)
+            self.w_os2 = nn.Linear(hidden_size, 1)
+            self.w_oe2 = nn.Linear(hidden_size, 1)
 
         # Objectiveness layer
         self.w_obj = nn.Linear(self.bert_hidden_size, 1)
@@ -239,21 +365,26 @@ class OpinionNet(nn.Module):
         )  # (batch_size, seq_len, bert_hidden_size)
 
         # Aspect start/end logits using pointer network
-        as_logits = self._compute_pointer_logits(
-            sequence_output, self.w_as11, self.w_as12, self.w_as2
-        )
-
-        ae_logits = self._compute_pointer_logits(
-            sequence_output, self.w_ae21, self.w_ae22, self.w_ae2
-        )
-
-        # Opinion start/end logits using pointer network
-        os_logits = self._compute_pointer_logits(
-            sequence_output, self.w_os11, self.w_os12, self.w_os2
-        )
-        oe_logits = self._compute_pointer_logits(
-            sequence_output, self.w_oe21, self.w_oe22, self.w_oe2
-        )
+        if self.use_biaffine:
+            # Use Biaffine attention for richer span interaction
+            as_logits = self.biaffine_as(sequence_output)
+            ae_logits = self.biaffine_ae(sequence_output)
+            os_logits = self.biaffine_os(sequence_output)
+            oe_logits = self.biaffine_oe(sequence_output)
+        else:
+            # Original additive pointer network
+            as_logits = self._compute_pointer_logits(
+                sequence_output, self.w_as11, self.w_as12, self.w_as2
+            )
+            ae_logits = self._compute_pointer_logits(
+                sequence_output, self.w_ae21, self.w_ae22, self.w_ae2
+            )
+            os_logits = self._compute_pointer_logits(
+                sequence_output, self.w_os11, self.w_os12, self.w_os2
+            )
+            oe_logits = self._compute_pointer_logits(
+                sequence_output, self.w_oe21, self.w_oe22, self.w_oe2
+            )
 
         # Objectiveness logits
         obj_logits: torch.Tensor = self.w_obj(self.dropout(sequence_output)).squeeze(-1)
@@ -317,8 +448,31 @@ class OpinionNet(nn.Module):
         targets: List[torch.Tensor],
         neg_sub: bool = False,
     ) -> torch.Tensor:
-        """Compute training loss."""
-        ce_fn = focal_ce_with_logits if self.focal else F.cross_entropy
+        """Compute training loss with optional label smoothing.
+
+        Args:
+            logits: List of 7 logit tensors from forward pass
+            targets: List of 7 target tensors
+            neg_sub: Whether to use negative subsampling for objectiveness loss
+
+        Returns:
+            Total loss value
+        """
+        # Choose loss function based on focal flag
+        if self.focal:
+
+            def ce_fn(logit, tgt, ignore_index=-1):
+                return focal_ce_with_logits(logit, tgt, ignore_index=ignore_index)
+        elif self.label_smoothing > 0:
+            # Use label smoothing cross entropy
+            def ce_fn(logit, tgt, ignore_index=-1):
+                return label_smoothing_ce(
+                    logit, tgt, smoothing=self.label_smoothing, ignore_index=ignore_index
+                )
+        else:
+
+            def ce_fn(logit, tgt, ignore_index=-1):
+                return F.cross_entropy(logit, tgt, ignore_index=ignore_index)
 
         # Sum CE losses for all outputs except objectiveness (index 4)
         loss = sum(
@@ -460,7 +614,9 @@ class OpinionNet(nn.Module):
 
 __all__ = [
     "OpinionNet",
+    "BiaffineAttention",
     "margin_negsub_bce_with_logits",
     "focal_bce_with_logits",
     "focal_ce_with_logits",
+    "label_smoothing_ce",
 ]

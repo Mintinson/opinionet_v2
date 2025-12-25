@@ -69,4 +69,26 @@ PRETRAINED_MODELS: Dict[str, Dict[str, Any]] = {
         "version": "large",
         "focal": True,
     },
+    # Large models (768 -> 1024 hidden size)
+    "roberta_large": {
+        "name": "roberta_large",
+        "path": "hfl/chinese-roberta-wwm-ext-large",
+        "lr": 3e-6,  # Lower LR for large models
+        "version": "large",
+        "focal": False,
+    },
+    "macbert_large": {
+        "name": "macbert_large",
+        "path": "hfl/chinese-macbert-large",
+        "lr": 3e-6,
+        "version": "large",
+        "focal": False,
+    },
+    "ernie_large": {
+        "name": "ernie_large",
+        "path": "nghuyong/ernie-3.0-xbase-zh",  # ERNIE 3.0 xbase is larger
+        "lr": 4e-6,
+        "version": "large",
+        "focal": False,
+    },
 }

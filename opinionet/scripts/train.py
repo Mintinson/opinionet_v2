@@ -22,11 +22,12 @@ from opinionet.utils.common import Metrics
 # fmt: off
 @dataclass
 class TrainingConfig:
-    base_model: Literal["roberta", "wwm", "ernie"] = "roberta"  # Base pretrained model to use
+    # === Base Configuration ===
+    base_model: Literal["roberta", "wwm", "ernie", "roberta_large", "macbert_large", "ernie_large"] = "roberta"  # Base pretrained model to use
     data_type : Literal["laptop", "makeup"] = "makeup"  # Type of dataset
     reviews_path: str = "data/TRAIN/Train_reviews.csv"  # Path to reviews CSV file
     labels_path: str = "data/TRAIN/Train_labels.csv" # Path to labels CSV file
-    epochs: int = 5  # Number of training epochs
+    epochs: int = 30  # Number of training epochs
     batch_size: int = 8  # Batch size for training
     lr : Optional[float] = None # Learning rate (None to use default from PRETRAINED_MODELS)
     warmup_epochs: int = 2  # Number of warmup epochs
@@ -36,6 +37,28 @@ class TrainingConfig:
     seed :int = 502  # Random seed for reproducibility
     focal : bool = False  # Whether to use focal loss
     max_num_ckpt_saves: int = 3  # Maximum number of model checkpoints to save
+
+    # === Optimization Switches (for ablation study) ===
+    # Biaffine Pointer Network: Use bilinear interaction instead of additive
+    use_biaffine: bool = False  # Enable Biaffine attention for pointer network
+    biaffine_hidden_size: int = 150  # Hidden size for biaffine layer
+
+    # R-Drop Regularization: Forward twice and minimize KL divergence
+    use_rdrop: bool = False  # Enable R-Drop regularization
+    rdrop_alpha: float = 0.1  # Weight for KL divergence loss in R-Drop (reduced for stability)
+
+    # Label Smoothing: Soften one-hot labels to prevent overconfidence
+    label_smoothing: float = 0.0  # Label smoothing factor (0.0 = disabled, 0.1 recommended)
+
+    # FGM Adversarial Training: Add perturbation to embeddings
+    use_fgm: bool = False  # Enable FGM adversarial training
+    fgm_epsilon: float = 0.5  # Perturbation magnitude for FGM (0.5 for Large models, 1.0 for base)
+
+    # NMS threshold for post-processing (tunable)
+    nms_threshold: float = 0.1  # NMS threshold for filtering overlapping predictions
+
+    # Gradient clipping (important for Large models and R-Drop/FGM)
+    max_grad_norm: float = 1.0  # Maximum gradient norm for clipping (0 = disabled)
 # fmt: on
 
 overwatch = initialize_overwatch(__name__)
@@ -78,6 +101,15 @@ def train(cfg: TrainingConfig):
     overwatch.info(f"   Batch Size: {cfg.batch_size}")
     overwatch.info(f"   Focal loss: {focal}")
     overwatch.info(f"   Device: {cfg.device}")
+    # Log optimization switches
+    overwatch.info("   === Optimization Switches ===")
+    overwatch.info(
+        f"   Biaffine: {cfg.use_biaffine} (hidden_size={cfg.biaffine_hidden_size})"
+    )
+    overwatch.info(f"   R-Drop: {cfg.use_rdrop} (alpha={cfg.rdrop_alpha})")
+    overwatch.info(f"   Label Smoothing: {cfg.label_smoothing}")
+    overwatch.info(f"   FGM: {cfg.use_fgm} (epsilon={cfg.fgm_epsilon})")
+    overwatch.info(f"   NMS Threshold: {cfg.nms_threshold}")
     save_cfg_yaml(cfg, output_dir / "config.yaml")
 
     overwatch.info("📚 Loading tokenizer...")
@@ -100,10 +132,16 @@ def train(cfg: TrainingConfig):
     overwatch.info(f"   Val samples: {len(val_loader.dataset)}")  # pyright: ignore[reportArgumentType]
     overwatch.info("=" * 80)
 
-    # Create model
+    # Create model with optimization switches
     overwatch.info("🤖 Creating model...")
     bert_config = BertConfig.from_pretrained(model_path)
-    model = OpinionNet(config=bert_config, focal=focal)
+    model = OpinionNet(
+        config=bert_config,
+        focal=focal,
+        use_biaffine=cfg.use_biaffine,
+        biaffine_hidden_size=cfg.biaffine_hidden_size,
+        label_smoothing=cfg.label_smoothing,
+    )
 
     # Load pretrained weights
     try:
@@ -137,6 +175,13 @@ def train(cfg: TrainingConfig):
             device=cfg.device,
             data_type=cfg.data_type,
             epoch_str=f"{epoch + 1}/{cfg.epochs}",
+            # Pass optimization switches
+            use_rdrop=cfg.use_rdrop,
+            rdrop_alpha=cfg.rdrop_alpha,
+            use_fgm=cfg.use_fgm,
+            fgm_epsilon=cfg.fgm_epsilon,
+            nms_threshold=cfg.nms_threshold,
+            max_grad_norm=cfg.max_grad_norm,
         )
         train_data.loss.append(train_loss)
         train_data.f1.append(train_f1)
@@ -170,6 +215,7 @@ def train(cfg: TrainingConfig):
             device=cfg.device,
             data_type=cfg.data_type,
             epoch_str=f"{epoch + 1}/{cfg.epochs}",
+            nms_threshold=cfg.nms_threshold,
         )
         val_data.loss.append(val_loss)
         val_data.f1.append(val_f1)
