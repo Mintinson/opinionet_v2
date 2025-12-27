@@ -24,7 +24,7 @@ from opinionet.overwatch.overwatch import initialize_overwatch
 @dataclass
 class EvaluationConfig:
     model_path: str  # Path to the trained model
-    base_model: Literal["roberta", "wwm", "ernie"] = "roberta"  # Base pretrained model used
+    base_model: Literal["roberta", "wwm", "ernie", "roberta_large", "macbert_large", "ernie_large"] = "roberta"  # Base pretrained model used
     review_path: str =  'data/TEST/Test_reviews.csv' # Path to the evaluation dataset
     labels_path: Optional[str] = None  # Path to test labels CSV file (optional, for validation)
     data_type : Literal["laptop", "makeup"] = "makeup"  # Type of dataset
@@ -32,6 +32,9 @@ class EvaluationConfig:
     batch_size: int = 8  # Batch size for evaluation
     device: str = "cuda"  # Device to use for evaluation
     threshold: float = 0.1  # 'NMS threshold for filtering predictions'
+
+    use_biaffine: bool = False  # Enable Biaffine attention for pointer network
+    biaffine_hidden_size: int = 150  # Hidden size for biaffine layer
 # fmt: on
 
 overwatch = initialize_overwatch(__name__)
@@ -45,6 +48,10 @@ def evaluate(cfg: EvaluationConfig):
     overwatch.info(f"   Base model: {cfg.base_model}")
     overwatch.info(f"   Data type: {cfg.data_type}")
     overwatch.info(f"   Device: {cfg.device}")
+    overwatch.info("   === Optimization Switches ===")
+    overwatch.info(
+        f"   Biaffine: {cfg.use_biaffine} (hidden_size={cfg.biaffine_hidden_size})"
+    )
 
     model_config = PRETRAINED_MODELS[cfg.base_model]
     pretrained_path = model_config["path"]
@@ -75,7 +82,7 @@ def evaluate(cfg: EvaluationConfig):
     # Create model
     overwatch.info("🔧 Initializing model...")
     bert_config = BertConfig.from_pretrained(pretrained_path)
-    model = OpinionNet(bert_config)
+    model = OpinionNet(bert_config, use_biaffine=cfg.use_biaffine, biaffine_hidden_size=cfg.biaffine_hidden_size)
 
     device = torch.device(cfg.device)
     chekkpoint = torch.load(cfg.model_path, map_location=device)

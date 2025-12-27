@@ -26,13 +26,16 @@ class EnsembleConfig:
     # Example: ["models/roberta_makeup/seed502/best.pt", "models/roberta_makeup/seed42/best.pt"]
     model_paths: List[str] = field(default_factory=list)
 
-    base_model: Literal["roberta", "wwm", "ernie"] = "roberta"  # Base pretrained model used (must be same for all)
+    base_model: Literal["roberta", "wwm", "ernie", "roberta_large", "macbert_large", "ernie_large"] = "roberta"  # Base pretrained model used (must be same for all)
     review_path: str = 'data/TEST/Test_reviews.csv' # Path to the evaluation dataset
     data_type : Literal["laptop", "makeup"] = "makeup"  # Type of dataset
     output: str = 'submit/Result_Ensemble.csv'  # Path to save evaluation results
     batch_size: int = 8  # Batch size for evaluation
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     threshold: float = 0.1  # NMS threshold
+
+    use_biaffine: bool = False  # Enable Biaffine attention for pointer network
+    biaffine_hidden_size: int = 150  # Hidden size for biaffine layer
 # fmt: on
 
 overwatch = initialize_overwatch(__name__)
@@ -80,6 +83,9 @@ def ensemble_evaluate(cfg: EnsembleConfig):
     overwatch.info(f"   Base model: {cfg.base_model}")
     overwatch.info(f"   Data type: {cfg.data_type}")
     overwatch.info(f"   Review path: {cfg.review_path}")
+    overwatch.info(
+        f"   Biaffine: {cfg.use_biaffine} (hidden_size={cfg.biaffine_hidden_size})"
+    )
 
     # 1. Load Tokenizer & Config (Assuming all models share the same base config)
     model_config = PRETRAINED_MODELS[cfg.base_model]
@@ -116,7 +122,7 @@ def ensemble_evaluate(cfg: EnsembleConfig):
     for i, path in enumerate(cfg.model_paths):
         try:
             overwatch.info(f"   [{i + 1}/{len(cfg.model_paths)}] Loading {path}...")
-            model = OpinionNet(bert_config)  # Initialize structure
+            model = OpinionNet(bert_config, use_biaffine=cfg.use_biaffine, biaffine_hidden_size=cfg.biaffine_hidden_size)  # Initialize structure
             checkpoint = torch.load(path, map_location=device)
             model.load_state_dict(checkpoint)
             model.to(device)
