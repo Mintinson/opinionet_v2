@@ -65,7 +65,8 @@ train_model --epochs 10
 在测试集上评估模型性能，计算 F1 分数等指标。
 
 ```bash
-eval_model --model_path checkpoints/best_model.pt --data_path data/TEST/Test_reviews.csv
+# 如果不指定 model_path, 会默认选择 ckpt_dir 下的 xxx_best.pt 
+eval_model --ckpt_dir models/roberta_large_makeup/20251226_160310 --model_path your_ckpt_name
 ```
 
 ### 4. 指标可视化 (Visualization)

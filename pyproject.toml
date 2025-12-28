@@ -1,6 +1,6 @@
 [project]
 name = "opinionet"
-version = "2.0.0"
+version = "2.3.0"
 description = "OpinioNet: One-stage End-to-End Entity-Relation Extraction for Opinion Mining"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"

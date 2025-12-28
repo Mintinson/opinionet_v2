@@ -4,9 +4,9 @@ Script for evaluating OpinioNet models.
 This is a evaluation script using the refactored OpinioNet package.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 import draccus
 import pandas as pd
@@ -18,30 +18,59 @@ from opinionet.data.dataset import ReviewDataset
 from opinionet.evaluation.metrics import evaluate_model
 from opinionet.models.opinnet import OpinionNet
 from opinionet.overwatch.overwatch import initialize_overwatch
+from opinionet.scripts.train import TrainingConfig
 
 
 # fmt: off
 @dataclass
-class EvaluationConfig:
-    model_path: str  # Path to the trained model
-    base_model: Literal["roberta", "wwm", "ernie", "roberta_large", "macbert_large", "ernie_large"] = "roberta"  # Base pretrained model used
-    review_path: str =  'data/TEST/Test_reviews.csv' # Path to the evaluation dataset
-    labels_path: Optional[str] = None  # Path to test labels CSV file (optional, for validation)
-    data_type : Literal["laptop", "makeup"] = "makeup"  # Type of dataset
-    output: str = 'submit/Result.csv'  # Path to save evaluation results
-    batch_size: int = 8  # Batch size for evaluation
-    device: str = "cuda"  # Device to use for evaluation
-    threshold: float = 0.1  # 'NMS threshold for filtering predictions'
+class EvaluationConfig(TrainingConfig):
 
-    use_biaffine: bool = False  # Enable Biaffine attention for pointer network
-    biaffine_hidden_size: int = 150  # Hidden size for biaffine layer
+    ckpt_dir: Optional[str] = None # Directory containing the trained model checkpoint, the script will look for `config.yaml` in this directory
+    model_path: str = ""     # name to the trained model checkpoint. if empty, use default (best) from TrainingConfig the parent directory will be the config file output directory
+    review_path: str =  'data/TEST/Test_reviews.csv' # Path to the evaluation dataset
+    eval_labels_path: Optional[str] = None  # Path to test labels CSV file (optional, for validation)
+    output: str = 'submit/Result.csv'  # Path to save evaluation results
 # fmt: on
 
 overwatch = initialize_overwatch(__name__)
 
 
+def load_config_from_checkpoint(
+    ckpt_dir: Path, old_config: EvaluationConfig
+) -> EvaluationConfig:
+    """Load evaluation configuration from a checkpoint directory."""
+    import yaml
+
+    config_path = ckpt_dir / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+    old_config_dict = asdict(old_config)
+    # Update only the fields that exist in the old configuration
+    config_dict.update({k: v for k, v in old_config_dict.items() if k not in config_dict})
+    eval_config = EvaluationConfig(**config_dict)
+
+    return eval_config
+
+
 @draccus.wrap()
 def evaluate(cfg: EvaluationConfig):
+    if not cfg.ckpt_dir:
+        msg = "⚠️ ckpt_dir not specified, attempting to use model_path directly."
+        overwatch.error(msg)
+        raise RuntimeError(msg)
+    ckpt_dir = Path(cfg.ckpt_dir)
+    if not ckpt_dir.exists():
+        msg = f"⚠️ Specified ckpt_dir does not exist: {ckpt_dir}"
+        overwatch.error(msg)
+        raise FileNotFoundError(msg)
+    cfg = load_config_from_checkpoint(ckpt_dir, cfg)
+    if not cfg.model_path:
+        # Use default best checkpoint from training
+        cfg.model_path = str(ckpt_dir / f"{cfg.base_model}_best.pt")
+
     overwatch.info(
         f"🔍 Evaluating OpinioNet model from {cfg.model_path} on {cfg.review_path}"
     )
@@ -62,7 +91,7 @@ def evaluate(cfg: EvaluationConfig):
     overwatch.info("📊 Loading evaluation data...")
     test_dataset = ReviewDataset(
         reviews_path=cfg.review_path,
-        labels_path=cfg.labels_path,
+        labels_path=cfg.eval_labels_path,
         tokenizer=tokenizer,
         data_type=cfg.data_type,
     )
@@ -82,7 +111,11 @@ def evaluate(cfg: EvaluationConfig):
     # Create model
     overwatch.info("🔧 Initializing model...")
     bert_config = BertConfig.from_pretrained(pretrained_path)
-    model = OpinionNet(bert_config, use_biaffine=cfg.use_biaffine, biaffine_hidden_size=cfg.biaffine_hidden_size)
+    model = OpinionNet(
+        bert_config,
+        use_biaffine=cfg.use_biaffine,
+        biaffine_hidden_size=cfg.biaffine_hidden_size,
+    )
 
     device = torch.device(cfg.device)
     chekkpoint = torch.load(cfg.model_path, map_location=device)
@@ -99,7 +132,7 @@ def evaluate(cfg: EvaluationConfig):
         model=model, dataloader=test_loader, device=cfg.device, desc="Evaluating"
     )
 
-    if cfg.labels_path:
+    if cfg.eval_labels_path:
         overwatch.info("📈 Evaluation Results:")
         overwatch.info(f"   F1 Score: {f1:.4f}")
         overwatch.info(f"   Precision: {precision:.4f}")
