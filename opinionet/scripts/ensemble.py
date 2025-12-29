@@ -215,38 +215,54 @@ def ensemble_evaluate(cfg: EnsembleConfig):
     reviews_df = pd.read_csv(cfg.review_path, encoding="utf-8")
     categories = ID2MAKEUP if cfg.data_type == "makeup" else ID2LAPTOP
 
-    def _format_prediction(pred_tuple: tuple, review_id: int) -> dict:
+    def _extract_term(review_text: str, start: int, end: int) -> str:
+        """Extract term from review text using positions."""
+        if start <= 0 or end <= 0:
+            return "_"
+        return review_text[start - 1:end]
+
+    def _format_prediction(pred_tuple: tuple, review_text: str, review_id: int) -> dict:
+        """Convert prediction tuple to submission format."""
         a_s, a_e, o_s, o_e, cat, pol = pred_tuple
         return {
             "id": review_id,
-            "A_start": a_s - 1 if a_s > 0 else "",
-            "A_end": a_e if a_e > 0 else "",
-            "O_start": o_s - 1 if o_s > 0 else "",
-            "O_end": o_e if o_e > 0 else "",
-            "Categories": categories[cat] if 0 <= cat < len(categories) else "",
-            "Polarities": ID2P[pol] if 0 <= pol < len(ID2P) else "",
+            "AspectTerm": _extract_term(review_text, a_s, a_e),
+            "OpinionTerm": _extract_term(review_text, o_s, o_e),
+            "Category": categories[cat] if 0 <= cat < len(categories) else "_",
+            "Polarity": ID2P[pol] if 0 <= pol < len(ID2P) else "_",
         }
 
-    results = []
     # Match predictions with review IDs
-    # Note: len(all_predictions) must equal len(reviews_df)
     if len(all_predictions) != len(reviews_df):
         overwatch.warning(
             f"⚠ Warning: Number of predictions ({len(all_predictions)}) does not match number of reviews ({len(reviews_df)})."
         )
-    for pred_set, review_id in zip(all_predictions, reviews_df["id"]):
-        for pred_tuple in pred_set:
-            results.append(_format_prediction(pred_tuple, review_id))
+
+    # Generate results with actual text extraction
+    results = [
+        _format_prediction(pred_tuple, row["Reviews"], row["id"])
+        for (_, row), pred_set in zip(reviews_df.iterrows(), all_predictions)
+        for pred_tuple in (pred_set if pred_set else [(0, 0, 0, 0, -1, -1)])
+    ]
+
+    # Ensure all review IDs are present (even if no predictions)
+    existing_ids = {r["id"] for r in results}
+    missing_results = [
+        {"id": rid, "AspectTerm": "_", "OpinionTerm": "_", "Category": "_", "Polarity": "_"}
+        for rid in reviews_df["id"]
+        if rid not in existing_ids
+    ]
+    results.extend(missing_results)
 
     # use the first model's directory to save
     output_path = Path(cfg.model_paths[0]).parent / cfg.output
-    # output_path = Path(cfg.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    results_df = pd.DataFrame(results)
+    # Sort by id and save without header, without BOM
+    results_df = pd.DataFrame(results).sort_values("id")
     results_df.to_csv(output_path, index=False, encoding="utf-8", header=False)
 
-    overwatch.info(f"   ✓ Ensemble results saved to {output_path}")
+    overwatch.info(f"   ✓ Ensemble results saved to {output_path} ({len(results)} predictions)")
     overwatch.info("✅ Ensemble evaluation complete!")
 
 
