@@ -109,8 +109,11 @@ visualize_metrics --help
 
 ## 产生文件位置
 
-默认情况下，**训练后**，该训练的配置会放置在 `models/{base_model}_{data_type}/{data_time}` 目录下，保存有本次训练的配置，最近的检查点，最优检查点，本次训练日志文件，以及训练和检验的metrics文件(`train_metrics.npy`)。
+* 默认情况下，**训练后**，该训练的配置会放置在 `models/{base_model}_{data_type}/{data_time}` 目录下，保存有本次训练的配置，最近的检查点，最优检查点，本次训练日志文件，以及训练和检验的metrics文件(`train_metrics.npy`)。
 
-**运行 eval_model** 并传递正确的模型路径后，程序会自动将预测结果放置在checkpoint同目录下的 `submit/Result.csv` 下。
+* **运行 `eval_model`** 并传递正确的模型路径后，程序会自动将预测结果放置在checkpoint同目录下的 `submit/Result.csv` 下。
 
-**运行 visualize_metrics** 并传递正确的模型路径后，程序会自动将可视化结果放置在checkpoint同目录下的 `training_metrics.png` 和 `validation_metrics.png` 下。
+
+* **运行 `ensemble_evaluate`** 并传递正确的模型路径后，程序会自动将预测结果放置在第一个checkpoint同目录下的 `submit_ensemble/Result.csv` 下。
+
+* **运行 `visualize_metrics`** 并传递正确的模型路径后，程序会自动将可视化结果放置在checkpoint同目录下的 `training_metrics.png` 和 `validation_metrics.png` 下。

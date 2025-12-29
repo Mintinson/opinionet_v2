@@ -170,7 +170,7 @@ def evaluate(cfg: EvaluationConfig):
     ]
 
     results_df = pd.DataFrame(results)
-    results_df.to_csv(output_path, index=False, encoding="utf-8")
+    results_df.to_csv(output_path, index=False, encoding="utf-8", header=False)
     overwatch.info(f"   ✓ Results saved ({len(results)} predictions)")
     overwatch.info("✅ Evaluation complete!")
 

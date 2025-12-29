@@ -10,6 +10,7 @@ from typing import List, Literal, Tuple
 import draccus
 import pandas as pd
 import torch
+import yaml
 from tqdm import tqdm
 from transformers import BertConfig, BertTokenizer
 
@@ -29,7 +30,7 @@ class EnsembleConfig:
     base_model: Literal["roberta", "wwm", "ernie", "roberta_large", "macbert_large", "ernie_large"] = "roberta"  # Base pretrained model used (must be same for all)
     review_path: str = 'data/TEST/Test_reviews.csv' # Path to the evaluation dataset
     data_type : Literal["laptop", "makeup"] = "makeup"  # Type of dataset
-    output: str = 'submit/Result_Ensemble.csv'  # Path to save evaluation results
+    output: str = 'submit_ensemble/Result.csv'  # Path to save evaluation results
     batch_size: int = 8  # Batch size for evaluation
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     threshold: float = 0.1  # NMS threshold
@@ -39,6 +40,33 @@ class EnsembleConfig:
 # fmt: on
 
 overwatch = initialize_overwatch(__name__)
+
+
+def get_trained_model(
+    model_path: str, bert_config: BertConfig, device: torch.device
+) -> OpinionNet:
+    """
+    Load a single trained OpinioNet model from the specified path.
+    And properly configure it according to the config.yaml in the same directory.
+    """
+    config_path = Path(model_path).parent / "config.yaml"
+    if not config_path.exists():
+        msg = f"❌ Configuration file not found for model at {model_path}"
+        overwatch.error(msg)
+        raise FileNotFoundError(msg)
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    model = OpinionNet(bert_config, **config_dict)  # Initialize structure
+    checkpoint = torch.load(model_path, map_location=device)
+    model.load_state_dict(checkpoint)
+    model.to(device)
+    model.eval()
+    # models.append(model)
+    # except Exception as e:
+    #     overwatch.error(f"   ❌ Failed to load model at {path}: {e}")
+    #     return
+    return model
 
 
 def average_probs(probs_list: List[Tuple[torch.Tensor, ...]]) -> Tuple[torch.Tensor, ...]:
@@ -120,17 +148,25 @@ def ensemble_evaluate(cfg: EnsembleConfig):
     device = torch.device(cfg.device)
 
     for i, path in enumerate(cfg.model_paths):
-        try:
-            overwatch.info(f"   [{i + 1}/{len(cfg.model_paths)}] Loading {path}...")
-            model = OpinionNet(bert_config, use_biaffine=cfg.use_biaffine, biaffine_hidden_size=cfg.biaffine_hidden_size)  # Initialize structure
-            checkpoint = torch.load(path, map_location=device)
-            model.load_state_dict(checkpoint)
-            model.to(device)
-            model.eval()
-            models.append(model)
-        except Exception as e:
-            overwatch.error(f"   ❌ Failed to load model at {path}: {e}")
-            return
+        overwatch.info(f"   [{i + 1}/{len(cfg.model_paths)}] Loading {path}...")
+
+        # try:
+        #     overwatch.info(f"   [{i + 1}/{len(cfg.model_paths)}] Loading {path}...")
+        #     model = OpinionNet(
+        #         bert_config,
+        #         use_biaffine=cfg.use_biaffine,
+        #         biaffine_hidden_size=cfg.biaffine_hidden_size,
+        #     )  # Initialize structure
+        #     checkpoint = torch.load(path, map_location=device)
+        #     model.load_state_dict(checkpoint)
+        #     model.to(device)
+        #     model.eval()
+        #     models.append(model)
+        # except Exception as e:
+        #     overwatch.error(f"   ❌ Failed to load model at {path}: {e}")
+        #     return
+        model = get_trained_model(path, bert_config, device)
+        models.append(model)
 
     overwatch.info(f"   ✓ Successfully loaded {len(models)} models.")
 
@@ -142,7 +178,6 @@ def ensemble_evaluate(cfg: EnsembleConfig):
         for _, inputs, _ in tqdm(
             test_loader, total=len(test_loader), desc="Ensemble Inference"
         ):
-
             # Move inputs to device
             input_ids, attention_mask, token_mask = [item.to(device) for item in inputs]
 
@@ -203,11 +238,13 @@ def ensemble_evaluate(cfg: EnsembleConfig):
         for pred_tuple in pred_set:
             results.append(_format_prediction(pred_tuple, review_id))
 
-    output_path = Path(cfg.output)
+    # use the first model's directory to save
+    output_path = Path(cfg.model_paths[0]).parent / cfg.output
+    # output_path = Path(cfg.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     results_df = pd.DataFrame(results)
-    results_df.to_csv(output_path, index=False, encoding="utf-8")
+    results_df.to_csv(output_path, index=False, encoding="utf-8", header=False)
 
     overwatch.info(f"   ✓ Ensemble results saved to {output_path}")
     overwatch.info("✅ Ensemble evaluation complete!")

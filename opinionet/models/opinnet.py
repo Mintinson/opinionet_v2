@@ -210,6 +210,7 @@ class OpinionNet(nn.Module):
         use_biaffine: bool = False,
         biaffine_hidden_size: int = 150,
         label_smoothing: float = 0.0,
+        **kwargs,
     ) -> None:
         super().__init__()
 
